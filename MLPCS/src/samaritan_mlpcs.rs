@@ -72,8 +72,8 @@ pub struct SamaritanMLPCS<E: Pairing>{
 impl<E: Pairing> SamaritanMLPCS<E>
 {
 
-    pub(crate) fn get_univariate_from_multilinear(multi_linear_poly: &DenseMultilinearExtension<E::ScalarField>) -> DensePolynomial<E::ScalarField>{
-        DensePolynomial::<E::ScalarField>::from_coefficients_vec(multi_linear_poly.to_evaluations())
+    pub(crate) fn get_univariate_from_multilinear_evals(multi_linear_poly_evals: Vec<E::ScalarField>) -> DensePolynomial<E::ScalarField>{
+        DensePolynomial::<E::ScalarField>::from_coefficients_vec(multi_linear_poly_evals)
     }
 
     // setup function that serves both for hiding KZG10 univariate and Samaritan ZK multilinear
@@ -112,8 +112,9 @@ impl<E: Pairing> SamaritanMLPCS<E>
     }
 
     // commit a multilinear polynomial w.r.t G1, which basically performs commit to univariate polynomial after transformation; r is random blinding value
-    pub fn zk_commit_G1(srs: &ZKSamaritanMLPCS_SRS<E>, multi_linear_poly: &DenseMultilinearExtension<E::ScalarField>, r: E::ScalarField) -> Result<Commitment<E>, Error> {
-        let univ_poly = Self::get_univariate_from_multilinear(multi_linear_poly);
+    pub fn zk_commit_G1(srs: &ZKSamaritanMLPCS_SRS<E>, multi_linear_poly_evals: Vec<E::ScalarField>, r: E::ScalarField) -> Result<Commitment<E>, Error> {
+        // let univ_poly = Self::get_univariate_from_multilinear(multi_linear_poly);
+        let univ_poly = Self::get_univariate_from_multilinear_evals(multi_linear_poly_evals);
         let commitment = E::G1::msm(&[&srs.powers_of_g[..(univ_poly.coeffs().len())], &vec![srs.xi_g1]].concat(), &[univ_poly.coeffs(), &[r]].concat()).unwrap().into_affine();
         Ok(Commitment(commitment))
     }
@@ -437,7 +438,8 @@ impl<E: Pairing> SamaritanMLPCS<E>
         multi_linear_poly: &DenseMultilinearExtension<E::ScalarField>,
         point: &Vec<E::ScalarField>,
         eval: E::ScalarField,
-        r_f: E::ScalarField
+        r_f: E::ScalarField,
+        mlp_evals: Vec<E::ScalarField>
         // rng: &mut dyn RngCore,
     ) -> Result<ZKSamaritanMLPCSEvalProof<E>, Error> {
         // let prover_time = start_timer!(|| format!("SamaritanMLPCS::prove with multilinear polynomial of maximum variables {}", multi_linear_poly.num_vars));
@@ -453,7 +455,7 @@ impl<E: Pairing> SamaritanMLPCS<E>
 
         // println!("mu: {}, kappa: {}, nu: {}, n: {}, m: {}, l: {}, max_deg: {}", mu, kappa, nu, n, m, l, max_deg);
 
-        let f_hat = Self::get_univariate_from_multilinear(&multi_linear_poly);
+        let f_hat = Self::get_univariate_from_multilinear_evals(mlp_evals);
 
         let mut transcript = Transcript::new(b"SamaritanMLPCS Transcript");
 
@@ -690,16 +692,18 @@ mod tests {
     #[test]
     fn functionality_test() {
         let mut rng = &mut test_rng();
-        let num_vars = 20;
+        let num_vars = 10;
         let mlp = DenseMultilinearExtension::rand(num_vars, rng);
         // println!("mlp: {:?}", mlp);
+        let mlp_evals = mlp.to_evaluations();
+        let mlp_evals_clone = mlp_evals.clone();
 
         // the setup of SamaritanMLPCS
         let zk_srs = SamaritanMLPCS_Bls12_381::hiding_setup(num_vars, &mut rng).unwrap();
 
         // the commit of SamaritanMLPCS: commit to multilinear polynomial mlp, viewed as univariate polynomial f_hat, f_hat_commit is output by it.
         let r_f = Fr::rand(rng);
-        let comm = SamaritanMLPCS_Bls12_381::zk_commit_G1(&zk_srs, &mlp, r_f).unwrap();
+        let comm = SamaritanMLPCS_Bls12_381::zk_commit_G1(&zk_srs, mlp_evals, r_f).unwrap();
 
         // sampling a random point (basically mu number of field elements for mu-variate multilinear polynomial) and evaluate the polynomial at that point
         let point: Vec<_> = (0..num_vars).map(|_| Fr::rand(rng)).collect();
@@ -709,7 +713,7 @@ mod tests {
         // println!("At point: {:?}, eval is: {:?}", point, eval);
                 
         // run the interactive prover of SamaritanMLPCS to do a proof of evaluation to show mlp(point) = eval 
-        let zk_eval_proof = SamaritanMLPCS_Bls12_381::zk_prove(&zk_srs, &mlp, &point, eval, r_f).expect("something went wrong in proving");
+        let zk_eval_proof = SamaritanMLPCS_Bls12_381::zk_prove(&zk_srs, &mlp, &point, eval, r_f, mlp_evals_clone).expect("something went wrong in proving");
 
         // run the interactive verifier of SamaritanMLPCS to verify the proof of mlp(point) = eval
         let valid = SamaritanMLPCS_Bls12_381::zk_verify(&zk_srs, &comm, &point, eval, &zk_eval_proof).unwrap();
